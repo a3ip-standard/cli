@@ -1,11 +1,12 @@
 """
-a3ip — CLI for the A3IP package format.
+a3ip -- CLI for the A3IP package format.
 *Pronounced "ay-trip"*
 
 Commands:
   a3ip new <name>              Scaffold a new package that passes validate immediately
   a3ip validate <package_dir>  Run 9 normative checks; exit 0 if clean
   a3ip bundle <package_dir>    Build a .a3ip.bundle file ready for distribution
+  a3ip export --format <fmt>   Export to another format (cowork-plugin, apm) [planned v0.2]
 
 See https://a3ip.dev for the full specification.
 """
@@ -36,8 +37,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
     print("  " + str(pkg_dir / "components" / "skills" / (args.name + ".md")))
     print()
     print("Next steps:")
-    print("  1. Edit manifest.yaml — fill in description, permissions, components.")
-    print("  2. Edit INSTALL.md — describe the install steps.")
+    print("  1. Edit manifest.yaml -- fill in description, permissions, components.")
+    print("  2. Edit INSTALL.md -- describe the install steps.")
     print("  3. Run:  a3ip validate " + args.name + "/")
     print("  4. Run:  a3ip bundle " + args.name + "/")
     return 0
@@ -66,11 +67,48 @@ def _cmd_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+_EXPORT_FORMATS = {
+    "cowork-plugin": (
+        "Target: Anthropic Cowork Plugin (.plugin bundle)\n"
+        "\n"
+        "A3IP packages map cleanly to Cowork plugins: skills become skill files,\n"
+        "permissions become connector declarations, configuration becomes plugin settings.\n"
+        "A3IP acts as the portability and security layer around the plugin ecosystem --\n"
+        "packages authored once can target Cowork, Codex, Cursor, and others.\n"
+        "\n"
+        "Planned for a3ip v0.2. Track: https://github.com/a3ip-standard/cli/issues"
+    ),
+    "apm": (
+        "Target: Microsoft APM (Agent Package Manifest)\n"
+        "\n"
+        "A3IP is a superset of APM -- every A3IP package can emit a valid APM manifest.\n"
+        "The converter preserves components, dependencies, and context declarations.\n"
+        "\n"
+        "Planned for a3ip v0.2. Track: https://github.com/a3ip-standard/cli/issues"
+    ),
+}
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    fmt = args.format
+    details = _EXPORT_FORMATS[fmt]
+    print("a3ip export --format " + fmt)
+    print()
+    print("  Status: planned for a3ip v0.2")
+    print()
+    for line in details.splitlines():
+        print(("  " + line) if line else "")
+    print()
+    print("  Until this converter ships, install the package natively:")
+    print("  Drop the .a3ip.bundle into any A3IP-compatible AI and ask it to install.")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="a3ip",
         description=(
-            "A3IP — AI Infrastructure Installation Package (pronounced 'ay-trip')\n"
+            "A3IP -- AI Infrastructure Installation Package (pronounced 'ay-trip')\n"
             "Package, validate, and bundle portable AI agent workflows.\n\n"
             "Spec:  https://a3ip.dev\n"
             "Docs:  https://github.com/a3ip-standard/spec"
@@ -85,7 +123,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     sub.required = True
 
-    # ── new ──────────────────────────────────────────────────────────────────
+    # -- new ------------------------------------------------------------------
     p_new = sub.add_parser(
         "new",
         help="Scaffold a new package that passes validate on first run",
@@ -101,22 +139,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_new.set_defaults(func=_cmd_new)
 
-    # ── validate ─────────────────────────────────────────────────────────────
+    # -- validate -------------------------------------------------------------
     p_val = sub.add_parser(
         "validate",
         help="Run 9 normative checks on a package directory",
         description=(
             "Validate an A3IP package against the spec.\n\n"
             "Runs 9 checks:\n"
-            "  1. Config coverage     — {{config.*}} refs match manifest declarations\n"
-            "  2. Script existence    — declared script files exist on disk\n"
-            "  3. Script config reads — scripts only read declared config keys\n"
-            "  4. Cross-platform      — Windows scripts have a cross-platform fallback\n"
-            "  5. Auth flows          — auth scripts are referenced in INSTALL.md\n"
-            "  6. Changelog present   — CHANGELOG.md required for version > 1.0.0\n"
-            "  7. Refresh scripts     — refresh_script keys declared in manifest\n"
-            "  8. Trust→permissions   — elevated trust requires a permissions block\n"
-            "  9. Trust→plan section  — write/shell trust requires ## Plan in INSTALL.md\n\n"
+            "  1. Config coverage     -- {{config.*}} refs match manifest declarations\n"
+            "  2. Script existence    -- declared script files exist on disk\n"
+            "  3. Script config reads -- scripts only read declared config keys\n"
+            "  4. Cross-platform      -- Windows scripts have a cross-platform fallback\n"
+            "  5. Auth flows          -- auth scripts are referenced in INSTALL.md\n"
+            "  6. Changelog present   -- CHANGELOG.md required for version > 1.0.0\n"
+            "  7. Refresh scripts     -- refresh_script keys declared in manifest\n"
+            "  8. Trust->permissions  -- elevated trust requires a permissions block\n"
+            "  9. Trust->plan section -- write/shell trust requires ## Plan in INSTALL.md\n\n"
             "Exit code: 0 if all checks pass, 1 if any errors found.\n"
             "Warnings do not affect the exit code."
         ),
@@ -129,7 +167,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_val.set_defaults(func=_cmd_validate)
 
-    # ── bundle ────────────────────────────────────────────────────────────────
+    # -- bundle ---------------------------------------------------------------
     p_bun = sub.add_parser(
         "bundle",
         help="Build a .a3ip.bundle file ready for distribution",
@@ -154,6 +192,31 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_bun.set_defaults(func=_cmd_bundle)
+
+    # -- export ---------------------------------------------------------------
+    p_exp = sub.add_parser(
+        "export",
+        help="Export to another format: cowork-plugin, apm [planned v0.2]",
+        description=(
+            "Convert an A3IP package to another agent package format.\n\n"
+            "A3IP is designed as an interoperability layer -- packages can be exported\n"
+            "to platform-native formats without losing permissions or component structure.\n\n"
+            "Available formats:\n"
+            "  cowork-plugin   Anthropic Cowork Plugin bundle\n"
+            "  apm             Microsoft Agent Package Manifest\n\n"
+            "These commands are documented now so tooling and CI scripts can reference them.\n"
+            "They will print a roadmap notice until the converters ship in v0.2."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_exp.add_argument("package_dir", help="Path to the package directory to export")
+    p_exp.add_argument(
+        "--format", "-f", required=True,
+        choices=list(_EXPORT_FORMATS.keys()),
+        metavar="FORMAT",
+        help="Target format: " + ", ".join(_EXPORT_FORMATS.keys()),
+    )
+    p_exp.set_defaults(func=_cmd_export)
 
     return parser
 
