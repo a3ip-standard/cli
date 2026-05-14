@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a3ip"
+version = "1.0.0"
+description = "CLI for A3IP - AI Infrastructure Installation Package (pronounced 'ay-trip')"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Maksym Prydorozhko", email = "maksim5007@gmail.com" }]
+requires-python = ">=3.9"
+keywords = ["a3ip", "ai", "agent", "workflow", "package", "installer"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+]
+dependencies = []
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=6.0"]
+
+[project.urls]
+Homepage = "https://a3ip.dev"
+Repository = "https://github.com/a3ip-standard/cli"
+"Bug Tracker" = "https://github.com/a3ip-standard/cli/issues"
+Specification = "https://github.com/a3ip-standard/spec"
+
+[project.scripts]
+a3ip = "a3ip.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
