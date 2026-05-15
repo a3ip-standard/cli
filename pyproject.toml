@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a3ip"
-version = "1.0.0"
+version = "1.1.0"
 description = "CLI for A3IP - AI Infrastructure Installation Package (pronounced 'ay-trip')"
 readme = "README.md"
 license = { file = "LICENSE" }
