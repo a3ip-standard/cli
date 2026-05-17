@@ -46,6 +46,16 @@ def is_binary(path):
 
 
 def get_package_name(pkg_dir):
+    """Read the package name from manifest.yaml; fall back to directory name."""
+    manifest = pkg_dir / "manifest.yaml"
+    if manifest.exists():
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("name:"):
+                value = line.split(":", 1)[1].strip().strip('"').strip("'")
+                if value:
+                    return value
+    # Fallback: derive from directory name (legacy / when manifest is missing)
     name = pkg_dir.name
     if name.endswith(".a3ip"):
         name = name[:-5]
