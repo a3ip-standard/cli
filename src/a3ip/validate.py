@@ -1,5 +1,5 @@
 """
-A3IP validate — runs all 9 normative checks on a package directory.
+A3IP validate — runs all 10 normative checks on a package directory.
 
 Exit code: 0 if all checks pass (errors == 0), 1 otherwise.
 Warnings do not affect the exit code.
@@ -356,11 +356,75 @@ def check_plan_section(pkg_dir: Path, manifest: dict) -> tuple[list, list]:
 
 
 # ──────────────────────────────────────────────────────────
+# Check 10 — INSTALL.md spec compliance (spec v1.2+)
+# ──────────────────────────────────────────────────────────
+#
+# Confirms two things mandated by the A3IP spec INSTALL.md template:
+#   (a) manifest declares a required `install_dir` config key
+#   (b) INSTALL.md Step 1 (or some Step) checks `installed.json` at
+#       `{{config.install_dir}}` — that is the canonical detection signal
+#       for fresh-install vs upgrade.
+#
+# Packages that pass earlier checks but skip these produce non-functional
+# installs (the AI can't tell fresh from upgrade), so this is a hard error.
+
+def check_install_dir_spec(pkg_dir: Path, manifest: dict) -> tuple[list, list]:
+    errors, warnings = [], []
+
+    # (a) install_dir declared as a required config key
+    config_entries = manifest.get("configuration") or []
+    install_dir_entry = next(
+        (ck for ck in config_entries if ck.get("key") == "install_dir"),
+        None,
+    )
+    if install_dir_entry is None:
+        errors.append(
+            "Spec compliance: manifest configuration: block is missing the required "
+            "'install_dir' key. Every A3IP package must declare install_dir so the "
+            "AI installer can substitute {{config.install_dir}} in INSTALL.md. "
+            "Add it via scaffold.py (auto-injected on new packages) or manually."
+        )
+    else:
+        req = install_dir_entry.get("required")
+        if req is False or (isinstance(req, str) and req.lower() == "false"):
+            errors.append(
+                "Spec compliance: config key 'install_dir' must have required: true. "
+                "Without it the installer has nowhere to write config.json or installed.json."
+            )
+
+    # (b) INSTALL.md Step 1 uses installed.json + install_dir for detection
+    install_path = pkg_dir / "INSTALL.md"
+    if not install_path.exists():
+        return errors, warnings
+
+    install_text = install_path.read_text(encoding="utf-8", errors="replace")
+
+    has_installed_json_ref = "installed.json" in install_text
+    has_install_dir_template = "{{config.install_dir}}" in install_text
+
+    if not has_installed_json_ref:
+        errors.append(
+            "Spec compliance: INSTALL.md does not mention `installed.json`. "
+            "Step 1 of the spec INSTALL.md template requires checking for installed.json "
+            "to distinguish fresh install from upgrade."
+        )
+    if not has_install_dir_template:
+        errors.append(
+            "Spec compliance: INSTALL.md does not reference `{{config.install_dir}}`. "
+            "The spec INSTALL.md template uses {{config.install_dir}} for installed.json "
+            "lookup (Step 1), script location (Install Scripts), and installed.json write "
+            "(Step 8). Without it the installer doesn't know where state lives."
+        )
+
+    return errors, warnings
+
+
+# ──────────────────────────────────────────────────────────
 # Main entry point
 # ──────────────────────────────────────────────────────────
 
 def validate(pkg_dir_str: str) -> dict:
-    """Run all 9 checks. Returns {'ok': bool, 'errors': [...], 'warnings': [...]}."""
+    """Run all 10 checks. Returns {'ok': bool, 'errors': [...], 'warnings': [...]}."""
     pkg_dir = Path(pkg_dir_str)
     if not pkg_dir.is_dir():
         return {"ok": False, "errors": ["Not a directory: " + pkg_dir_str], "warnings": []}
@@ -383,6 +447,7 @@ def validate(pkg_dir_str: str) -> dict:
         ("refresh scripts",     lambda: check_refresh_scripts(pkg_dir, manifest)),
         ("trust→permissions",   lambda: check_trust_permissions(pkg_dir, manifest)),
         ("trust→plan section",  lambda: check_plan_section(pkg_dir, manifest)),
+        ("install_dir spec",    lambda: check_install_dir_spec(pkg_dir, manifest)),
     ]
 
     all_errors: list = []
