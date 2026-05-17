@@ -265,7 +265,7 @@ def bundle(pkg_dir_str: str, output_path_str: str = None, spec_path_str: str = N
     output_path = Path(output_path_str) if output_path_str else pkg_dir.parent / (name + "-v" + version + ".a3ip.bundle")
 
     mode = "offline/embedded spec" if spec_path else "standard (spec_url)"
-    print("Building bundle (" + mode + "): " + str(pkg_dir) + " → " + str(output_path))
+    print("Building bundle (" + mode + "): " + str(pkg_dir) + " -> " + str(output_path))
 
     result = build_bundle(pkg_dir, output_path, spec_path)
     size_kb = output_path.stat().st_size / 1024

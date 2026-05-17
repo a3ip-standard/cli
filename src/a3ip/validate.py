@@ -445,8 +445,8 @@ def validate(pkg_dir_str: str) -> dict:
         ("auth flows",          lambda: check_auth_flows(pkg_dir)),
         ("changelog present",   lambda: check_changelog_present(pkg_dir, manifest)),
         ("refresh scripts",     lambda: check_refresh_scripts(pkg_dir, manifest)),
-        ("trust→permissions",   lambda: check_trust_permissions(pkg_dir, manifest)),
-        ("trust→plan section",  lambda: check_plan_section(pkg_dir, manifest)),
+        ("trust->permissions",   lambda: check_trust_permissions(pkg_dir, manifest)),
+        ("trust->plan section",  lambda: check_plan_section(pkg_dir, manifest)),
         ("install_dir spec",    lambda: check_install_dir_spec(pkg_dir, manifest)),
     ]
 
@@ -468,13 +468,13 @@ def validate(pkg_dir_str: str) -> dict:
     ok = len(all_errors) == 0
     print()
     if ok and not all_warnings:
-        print("✓ Validation passed — no errors or warnings.")
+        print("[OK] Validation passed - no errors or warnings.")
     elif ok:
-        print("✓ Validation passed with " + str(len(all_warnings)) + " warning(s).")
+        print("[OK] Validation passed with " + str(len(all_warnings)) + " warning(s).")
         for w in all_warnings:
             print("  WARNING: " + w)
     else:
-        print("✗ Validation FAILED — " + str(len(all_errors)) + " error(s), "
+        print("[FAIL] Validation FAILED - " + str(len(all_errors)) + " error(s), "
               + str(len(all_warnings)) + " warning(s).")
         for e in all_errors:
             print("  ERROR: " + e)
