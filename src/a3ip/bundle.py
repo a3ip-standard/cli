@@ -226,8 +226,9 @@ def main():
         spec_path = None
 
     name = get_package_name(pkg_dir)
+    version = get_package_version(pkg_dir)
     if output_path is None:
-        output_path = pkg_dir.parent / (name + ".a3ip.bundle")
+        output_path = pkg_dir.parent / (name + "-v" + version + ".a3ip.bundle")
 
     mode = "offline/embedded spec" if spec_path else "standard (spec_url)"
     print("Building bundle (" + mode + "): " + str(pkg_dir) + " -> " + str(output_path))
@@ -260,7 +261,8 @@ def bundle(pkg_dir_str: str, output_path_str: str = None, spec_path_str: str = N
         spec_path = None
 
     name = get_package_name(pkg_dir)
-    output_path = Path(output_path_str) if output_path_str else pkg_dir.parent / (name + ".a3ip.bundle")
+    version = get_package_version(pkg_dir)
+    output_path = Path(output_path_str) if output_path_str else pkg_dir.parent / (name + "-v" + version + ".a3ip.bundle")
 
     mode = "offline/embedded spec" if spec_path else "standard (spec_url)"
     print("Building bundle (" + mode + "): " + str(pkg_dir) + " → " + str(output_path))
