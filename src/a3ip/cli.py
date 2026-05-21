@@ -4,15 +4,19 @@ a3ip -- CLI for the A3IP package format.
 
 Commands:
   a3ip new <name>              Scaffold a new package that passes validate immediately
-  a3ip validate <package_dir>  Run 9 normative checks; exit 0 if clean
+  a3ip validate <package_dir>  Run 10 normative checks + 3 v1.9 advisory warnings
   a3ip bundle <package_dir>    Build a .a3ip.bundle file ready for distribution
+  a3ip platforms               Print detected platform context (host OS + AI runtime)
   a3ip export --format <fmt>   Export to another format (cowork-plugin, apm) [planned v0.2]
 
 See https://a3ip.dev for the full specification.
 """
 
 import argparse
+import json
+import os
 import sys
+from pathlib import Path
 
 from a3ip import __version__, __spec_version__
 
@@ -48,7 +52,6 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     from a3ip.validate import validate
     report = validate(args.package_dir)
     if args.json:
-        import json
         print(json.dumps(report, indent=2))
     return 0 if report["ok"] else 1
 
@@ -64,6 +67,132 @@ def _cmd_bundle(args: argparse.Namespace) -> int:
     except (ValueError, OSError) as e:
         print("Error: " + str(e), file=sys.stderr)
         return 1
+    return 0
+
+
+# --------------------------------------------------------------------
+# `a3ip platforms` -- platform context detection (spec v1.9)
+# --------------------------------------------------------------------
+#
+# This command prints what an A3IP installer would derive as the host
+# operating system and the active AI runtime, per the "Detecting platform
+# context" section of A3IP spec v1.9. It is a heuristic; the installing AI
+# remains the authoritative judge of platform context at install time.
+#
+# Intended consumers:
+#   - Humans diagnosing "which adapter would be selected here?"
+#   - Tools like the A3IP Creator, which calls `a3ip platforms --json` to
+#     pre-fill its Phase 0.5 platform-detection step.
+
+def _detect_host_os() -> str:
+    """Return 'windows' or 'posix' per spec v1.7+ adapter convention."""
+    if os.name == "nt":
+        return "windows"
+    return "posix"
+
+
+def _detect_user_home() -> Path:
+    """Return the user's home directory, expanding ~ via OS-appropriate envs."""
+    candidate = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+    if candidate:
+        return Path(candidate)
+    return Path.home()
+
+
+def _detect_runtime_signals() -> list:
+    """Return a list of (signal, runtime, source) tuples ordered by strength.
+
+    Signal strength:
+      - 'directory' (strong): runtime-specific config dir exists
+      - 'project'   (medium): convention file present in CWD
+      - 'env'       (weak):   environment variable hint
+    """
+    signals = []
+    home = _detect_user_home()
+    cwd = Path.cwd()
+
+    # Strong: runtime config directories
+    if (home / ".codex").is_dir():
+        signals.append(("directory", "codex", str(home / ".codex")))
+    if (home / ".claude").is_dir():
+        signals.append(("directory", "claude-code-or-cowork", str(home / ".claude")))
+    if (home / ".cursor").is_dir():
+        signals.append(("directory", "cursor", str(home / ".cursor")))
+
+    # Medium: project-level convention files
+    if (cwd / "AGENTS.md").is_file():
+        signals.append(("project", "codex", str(cwd / "AGENTS.md")))
+    if (cwd / "CLAUDE.md").is_file():
+        signals.append(("project", "claude-code-or-cowork", str(cwd / "CLAUDE.md")))
+
+    # Weak: environment variables
+    if os.environ.get("CODEX_API_KEY") or os.environ.get("OPENAI_API_KEY"):
+        signals.append(("env", "codex-or-openai", "OPENAI/CODEX_API_KEY set"))
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        signals.append(("env", "claude-family", "ANTHROPIC_API_KEY set"))
+
+    return signals
+
+
+def _summarize_runtime(signals: list) -> str:
+    """Pick the most likely runtime label from the strongest signals.
+
+    Returns 'unknown' if there's nothing to go on, which is the right answer --
+    the installing AI MUST ask the user when context is ambiguous.
+    """
+    if not signals:
+        return "unknown"
+    # Prefer directory signals; among them, the first one wins.
+    for strength in ("directory", "project", "env"):
+        for sig_strength, runtime, _ in signals:
+            if sig_strength == strength:
+                return runtime
+    return "unknown"
+
+
+def _cmd_platforms(args: argparse.Namespace) -> int:
+    host_os = _detect_host_os()
+    home = _detect_user_home()
+    cwd = Path.cwd()
+    signals = _detect_runtime_signals()
+    runtime_label = _summarize_runtime(signals)
+
+    if args.json:
+        result = {
+            "spec_version": __spec_version__,
+            "host_os": host_os,
+            "runtime": runtime_label,
+            "home": str(home),
+            "cwd": str(cwd),
+            "signals": [
+                {"strength": s, "runtime": r, "source": src}
+                for (s, r, src) in signals
+            ],
+        }
+        print(json.dumps(result, indent=2))
+        return 0
+
+    print("A3IP platform context (per spec v" + __spec_version__ + ")")
+    print()
+    print("  Host OS:          " + host_os)
+    print("  User home:        " + str(home))
+    print("  Working dir:      " + str(cwd))
+    print("  Runtime (likely): " + runtime_label)
+
+    if signals:
+        print()
+        print("  Detection signals:")
+        for strength, runtime, source in signals:
+            label = ("    [" + strength + "]").ljust(16)
+            print(label + runtime + "  <-  " + source)
+    else:
+        print()
+        print("  No detection signals found. The installing AI MUST ask the user.")
+
+    print()
+    print("Note: this is a heuristic per spec v1.9 'Detecting platform context'.")
+    print("The installing AI remains authoritative -- it may know better from its")
+    print("tool surface than this CLI can see from filesystem alone.")
     return 0
 
 
@@ -142,21 +271,27 @@ def _build_parser() -> argparse.ArgumentParser:
     # -- validate -------------------------------------------------------------
     p_val = sub.add_parser(
         "validate",
-        help="Run 9 normative checks on a package directory",
+        help="Run 10 normative checks plus 3 v1.9 advisory warnings",
         description=(
             "Validate an A3IP package against the spec.\n\n"
-            "Runs 9 checks:\n"
-            "  1. Config coverage     -- {{config.*}} refs match manifest declarations\n"
-            "  2. Script existence    -- declared script files exist on disk\n"
-            "  3. Script config reads -- scripts only read declared config keys\n"
-            "  4. Cross-platform      -- Windows scripts have a cross-platform fallback\n"
-            "  5. Auth flows          -- auth scripts are referenced in INSTALL.md\n"
-            "  6. Changelog present   -- CHANGELOG.md required for version > 1.0.0\n"
-            "  7. Refresh scripts     -- refresh_script keys declared in manifest\n"
-            "  8. Trust->permissions  -- elevated trust requires a permissions block\n"
-            "  9. Trust->plan section -- write/shell trust requires ## Plan in INSTALL.md\n\n"
-            "Exit code: 0 if all checks pass, 1 if any errors found.\n"
-            "Warnings do not affect the exit code."
+            "Runs 10 normative checks (errors block install):\n"
+            "   1. Config coverage          -- {{config.*}} refs match manifest declarations\n"
+            "   2. Script existence         -- declared script files exist on disk\n"
+            "   3. Script config reads      -- scripts only read declared config keys\n"
+            "   4. Cross-platform           -- Windows scripts have a cross-platform fallback\n"
+            "   5. Auth flows               -- auth scripts are referenced in INSTALL.md\n"
+            "   6. Changelog present        -- CHANGELOG.md required for version > 1.0.0\n"
+            "   7. Refresh scripts          -- refresh_script keys declared in manifest\n"
+            "   8. Trust->permissions       -- elevated trust requires a permissions block\n"
+            "   9. Trust->plan section      -- write/shell trust requires ## Plan in INSTALL.md\n"
+            "  10. INSTALL.md spec          -- install_dir + installed.json wiring correct\n"
+            "\n"
+            "Plus 3 v1.9 advisory warnings (do not block install; harden to errors in v2.0):\n"
+            "  11. Adapter outcome coverage -- runtime adapters address Step 5/6/7 outcomes\n"
+            "  12. INSTALL.md tier shape    -- Tier 2 steps free of procedure-language leakage\n"
+            "  13. Adapter knowledge-shape  -- adapters are more prose than code (>= 2:1 ratio)\n"
+            "\n"
+            "Exit code: 0 if all errors are zero (warnings present or absent), 1 otherwise."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -192,6 +327,27 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_bun.set_defaults(func=_cmd_bundle)
+
+    # -- platforms ------------------------------------------------------------
+    p_plat = sub.add_parser(
+        "platforms",
+        help="Print detected platform context (host OS + AI runtime)",
+        description=(
+            "Print the platform context an A3IP installer would derive here:\n"
+            "host operating system (windows/posix) and the AI runtime (cowork,\n"
+            "codex, claude-code, cursor, ...).\n\n"
+            "This is a heuristic per A3IP spec v1.9 'Detecting platform context'.\n"
+            "Useful for diagnosing 'which adapter would be selected?' and for tools\n"
+            "(like the A3IP Creator) that want to pre-fill platform information.\n\n"
+            "Use --json for a machine-readable report."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_plat.add_argument(
+        "--json", action="store_true",
+        help="Print a JSON report instead of the human-readable summary",
+    )
+    p_plat.set_defaults(func=_cmd_platforms)
 
     # -- export ---------------------------------------------------------------
     p_exp = sub.add_parser(

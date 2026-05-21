@@ -5,5 +5,5 @@ A3IP — AI Infrastructure Installation Package
 CLI package for creating, validating, and bundling A3IP packages.
 """
 
-__version__ = "1.3.2"
-__spec_version__ = "1.8"
+__version__ = "1.4.0"
+__spec_version__ = "1.9"
