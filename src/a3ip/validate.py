@@ -1,11 +1,17 @@
 """
-A3IP validate -- runs all 10 normative checks plus 3 v1.9 advisory warnings
+A3IP validate -- runs all 10 normative checks plus 4 advisory warnings
 on a package directory.
 
-Checks 1-10 are normative (errors block install). Checks 11-13 are v1.9
-advisory warnings about the spec re-alignment to outcome-shaped INSTALL.md
-and knowledge-shaped adapters; they never block install in v1.9, but WILL
-become errors in spec v2.0.
+Checks 1-10 are normative (errors block install).
+Checks 11-13 are v1.9 advisory warnings about the spec re-alignment to
+outcome-shaped INSTALL.md and knowledge-shaped adapters.
+Check 14 is the v1.10 advisory warning for INSTALL.md uninstall coverage.
+Advisory warnings never block install today but WILL become errors in spec v2.0.
+
+In v1.10, Check 11 was extended to also scan uninstall-skill.md adapter
+files (Steps UN1/UN3/UN4/UN5 coverage) and to require Step 1 discovery
+coverage in install-skill.md. Check 13 was extended to scan
+uninstall-skill.md as well.
 
 Exit code: 0 if all checks pass (errors == 0), 1 otherwise.
 Warnings do not affect the exit code.
@@ -465,18 +471,26 @@ def check_install_dir_spec(pkg_dir: Path, manifest: dict) -> tuple[list, list]:
 
 
 # --------------------------------------------------------------------
-# Check 11 -- Adapter outcome coverage (spec v1.9, advisory warning)
+# Check 11 -- Adapter outcome coverage (spec v1.9, extended v1.10)
 # --------------------------------------------------------------------
 #
 # Each platform in platforms.tested whose adapter exists at
 # adapters/runtime/<X>/install-skill.md SHOULD reference each Tier 2 outcome
-# it influences (skills/artifacts/protocols).
+# it influences. Outcomes scanned (per spec v1.10):
+#   - discovery (Step 1 / UN1): existing-install detection — always needed
+#   - skill    (Step 5 / UN3): skill discoverability
+#   - artifact (Step 6 / UN4): artifact availability
+#   - protocol (Step 7 / UN5): protocol invocability
+#
+# v1.10 extension: uninstall-skill.md is scanned the same way for the
+# symmetric uninstall outcomes (UN1/UN3/UN4/UN5).
 #
 # Heuristic. Designed to catch the v1.2.x Codex bug class where adapters
 # placed files but didn't address the registration outcome.
 
 _OUTCOME_KEYWORDS = {
-    "skill":     ["skill", "discover", "load", "register"],
+    "discovery": ["installed.json", "existing install", "discover", "locate", "find", "detect"],
+    "skill":     ["skill", "register", "load"],
     "artifact":  ["artifact", "render", "view", "display"],
     "protocol":  ["protocol", "trigger", "command", "invoke"],
 }
@@ -504,33 +518,53 @@ def check_adapter_outcome_coverage(pkg_dir: Path, manifest: dict) -> tuple[list,
             has_artifacts = bool(re.search(r"^\s+artifacts:\s*$", text, re.MULTILINE))
             has_protocols = bool(re.search(r"^\s+protocols:\s*$", text, re.MULTILINE))
 
-    needed = []
+    # Discovery (Step 1 / UN1) is always needed -- every install must check
+    # for an existing install before proceeding.
+    needed = [("discovery", "locate the existing install (Step 1 / UN1 discovery)")]
     if has_skills:
-        needed.append(("skill", "make skills discoverable to the host runtime"))
+        needed.append(("skill", "make skills discoverable / un-discoverable to the host runtime"))
     if has_artifacts:
-        needed.append(("artifact", "make artifacts available on the host runtime"))
+        needed.append(("artifact", "make artifacts available / removed on the host runtime"))
     if has_protocols:
-        needed.append(("protocol", "make protocols invocable on the host runtime"))
+        needed.append(("protocol", "make protocols invocable / no longer invocable"))
 
-    if not needed:
-        return errors, warnings
+    # Scan both install-skill.md AND uninstall-skill.md (v1.10).
+    adapter_filenames = ("install-skill.md", "uninstall-skill.md")
 
     for platform in platforms_tested:
-        adapter_path = pkg_dir / "adapters" / "runtime" / platform / "install-skill.md"
-        if not adapter_path.exists():
-            continue
+        for filename in adapter_filenames:
+            adapter_path = pkg_dir / "adapters" / "runtime" / platform / filename
+            if not adapter_path.exists():
+                # uninstall-skill.md absence is flagged by the both-direction
+                # coverage rule, not here; this check only fires per-outcome
+                # for files that exist.
+                continue
 
-        text = adapter_path.read_text(encoding="utf-8", errors="replace").lower()
+            text = adapter_path.read_text(encoding="utf-8", errors="replace").lower()
 
-        for outcome_key, outcome_label in needed:
-            keywords = _OUTCOME_KEYWORDS[outcome_key]
-            if not any(kw in text for kw in keywords):
-                warnings.append(
-                    "Adapter '" + str(adapter_path.relative_to(pkg_dir))
-                    + "' does not address Tier 2 outcome: " + outcome_label + ". "
-                    "Each runtime adapter should describe its mechanism for this outcome. "
-                    "See A3IP spec v1.9, 'Writing Adapter Documents'."
-                )
+            for outcome_key, outcome_label in needed:
+                keywords = _OUTCOME_KEYWORDS[outcome_key]
+                if not any(kw in text for kw in keywords):
+                    warnings.append(
+                        "Adapter '" + str(adapter_path.relative_to(pkg_dir))
+                        + "' does not address Tier 2 outcome: " + outcome_label + ". "
+                        "Each runtime adapter should describe its mechanism for this outcome. "
+                        "See A3IP spec v1.10, 'Writing Adapter Documents'."
+                    )
+
+    # Both-direction coverage (v1.10): if install-skill.md exists,
+    # uninstall-skill.md SHOULD exist too. Emit one warning per missing pair.
+    for platform in platforms_tested:
+        install_path = pkg_dir / "adapters" / "runtime" / platform / "install-skill.md"
+        uninstall_path = pkg_dir / "adapters" / "runtime" / platform / "uninstall-skill.md"
+        if install_path.exists() and not uninstall_path.exists():
+            warnings.append(
+                "Adapter pair incomplete: '" + str(install_path.relative_to(pkg_dir))
+                + "' exists but '" + str(uninstall_path.relative_to(pkg_dir))
+                + "' is missing. v1.10 requires paired install/uninstall adapter "
+                "files for symmetric Tier 2 coverage. See A3IP spec v1.10, "
+                "'Paired install / uninstall adapter files'."
+            )
 
     return errors, warnings
 
@@ -619,13 +653,19 @@ def check_install_tier_shape(pkg_dir: Path) -> tuple[list, list]:
 
 
 # --------------------------------------------------------------------
-# Check 13 -- Adapter knowledge-shape (spec v1.9, advisory warning)
+# Check 13 -- Adapter knowledge-shape (spec v1.9, extended v1.10)
 # --------------------------------------------------------------------
 #
-# Adapter install-skill.md files SHOULD be more prose than code. Ratio of
-# non-code-block prose lines to code-block lines should be at least 2:1.
-# Adapters under this threshold are likely script-shaped rather than
-# knowledge-shaped.
+# Adapter install-skill.md AND uninstall-skill.md files SHOULD be more prose
+# than code. Ratio of non-code-block prose lines to code-block lines should
+# be at least 2:1. Adapters under this threshold are likely script-shaped
+# rather than knowledge-shaped.
+#
+# v1.10 extension: scans uninstall-skill.md alongside install-skill.md
+# (same ratio threshold and warning message format).
+
+_ADAPTER_FILENAMES_FOR_KNOWLEDGE_CHECK = ("install-skill.md", "uninstall-skill.md")
+
 
 def check_adapter_knowledge_shape(pkg_dir: Path) -> tuple[list, list]:
     errors, warnings = [], []
@@ -636,38 +676,75 @@ def check_adapter_knowledge_shape(pkg_dir: Path) -> tuple[list, list]:
     for platform_dir in sorted(adapters_runtime.iterdir()):
         if not platform_dir.is_dir():
             continue
-        adapter_path = platform_dir / "install-skill.md"
-        if not adapter_path.exists():
-            continue
 
-        text = adapter_path.read_text(encoding="utf-8", errors="replace")
-        in_fence = False
-        code_lines = 0
-        prose_lines = 0
-
-        for line in text.splitlines():
-            if re.match(r"^\s*```", line):
-                in_fence = not in_fence
+        for filename in _ADAPTER_FILENAMES_FOR_KNOWLEDGE_CHECK:
+            adapter_path = platform_dir / filename
+            if not adapter_path.exists():
                 continue
-            if in_fence:
-                if line.strip():
-                    code_lines += 1
-            else:
-                if line.strip():
-                    prose_lines += 1
 
-        if code_lines == 0:
-            continue
+            text = adapter_path.read_text(encoding="utf-8", errors="replace")
+            in_fence = False
+            code_lines = 0
+            prose_lines = 0
 
-        ratio = prose_lines / code_lines
-        if ratio < 2.0:
-            warnings.append(
-                "Adapter '" + str(adapter_path.relative_to(pkg_dir)) + "' looks more "
-                "script-shaped than knowledge-shaped (prose:code ratio = "
-                + ("%.1f" % ratio) + ", threshold >= 2.0). Adapters are Tier 3 "
-                "platform-knowledge artifacts -- describe conventions, mark code blocks as "
-                "illustrative. See A3IP spec v1.9, 'Writing Adapter Documents'."
-            )
+            for line in text.splitlines():
+                if re.match(r"^\s*```", line):
+                    in_fence = not in_fence
+                    continue
+                if in_fence:
+                    if line.strip():
+                        code_lines += 1
+                else:
+                    if line.strip():
+                        prose_lines += 1
+
+            if code_lines == 0:
+                continue
+
+            ratio = prose_lines / code_lines
+            if ratio < 2.0:
+                warnings.append(
+                    "Adapter '" + str(adapter_path.relative_to(pkg_dir)) + "' looks more "
+                    "script-shaped than knowledge-shaped (prose:code ratio = "
+                    + ("%.1f" % ratio) + ", threshold >= 2.0). Adapters are Tier 3 "
+                    "platform-knowledge artifacts -- describe conventions, mark code blocks as "
+                    "illustrative. See A3IP spec v1.10, 'Writing Adapter Documents'."
+                )
+
+    return errors, warnings
+
+
+# --------------------------------------------------------------------
+# Check 14 -- INSTALL.md uninstall coverage (spec v1.10, advisory warning)
+# --------------------------------------------------------------------
+#
+# INSTALL.md SHOULD contain a top-level ## Uninstalling section. The section
+# is the documented entry point for the v1.10 uninstall flow (Steps UN1-UN8
+# in the canonical template).
+#
+# Structural check only: looks for the ^## Uninstalling heading. Step
+# structure inside the section is the author's responsibility.
+#
+# Warning in v1.10 (gentle adoption); planned to become an error in v2.0
+# the same trajectory as Checks 11/12/13.
+
+_UNINSTALL_HEADING_RE = re.compile(r"(?m)^##\s+Uninstalling\b")
+
+
+def check_uninstall_coverage(pkg_dir: Path) -> tuple[list, list]:
+    errors, warnings = [], []
+    install_path = pkg_dir / "INSTALL.md"
+    if not install_path.exists():
+        # Check 6/10 already handles the missing-INSTALL.md case as an error.
+        return errors, warnings
+
+    text = install_path.read_text(encoding="utf-8", errors="replace")
+    if not _UNINSTALL_HEADING_RE.search(text):
+        warnings.append(
+            "INSTALL.md is missing the '## Uninstalling' section. "
+            "See A3IP spec v1.10 INSTALL.md template for the canonical "
+            "Steps UN1-UN8. Will become an error in spec v2.0."
+        )
 
     return errors, warnings
 
@@ -677,7 +754,7 @@ def check_adapter_knowledge_shape(pkg_dir: Path) -> tuple[list, list]:
 # --------------------------------------------------------------------
 
 def validate(pkg_dir_str: str) -> dict:
-    """Run all 10 normative checks plus 3 v1.9 advisory warnings.
+    """Run all 10 normative checks plus 4 advisory warnings (v1.9 + v1.10).
 
     Returns {'ok': bool, 'errors': [...], 'warnings': [...]}.
     """
@@ -707,6 +784,7 @@ def validate(pkg_dir_str: str) -> dict:
         ("adapter outcome coverage", lambda: check_adapter_outcome_coverage(pkg_dir, manifest)),
         ("install.md tier shape",    lambda: check_install_tier_shape(pkg_dir)),
         ("adapter knowledge-shape",  lambda: check_adapter_knowledge_shape(pkg_dir)),
+        ("uninstall coverage",       lambda: check_uninstall_coverage(pkg_dir)),
     ]
 
     all_errors: list = []

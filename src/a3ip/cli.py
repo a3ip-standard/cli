@@ -3,11 +3,15 @@ a3ip -- CLI for the A3IP package format.
 *Pronounced "ay-trip"*
 
 Commands:
-  a3ip new <name>              Scaffold a new package that passes validate immediately
-  a3ip validate <package_dir>  Run 10 normative checks + 3 v1.9 advisory warnings
-  a3ip bundle <package_dir>    Build a .a3ip.bundle file ready for distribution
-  a3ip platforms               Print detected platform context (host OS + AI runtime)
-  a3ip export --format <fmt>   Export to another format (cowork-plugin, apm) [planned v0.2]
+  a3ip new <name>                       Quick scaffold (minimal package, no intake)
+  a3ip scaffold <intake.json>           Full intake-driven scaffold (replaces creator-repo/scripts/scaffold.py)
+  a3ip sync <package_dir>               Detect changes since last bundle, suggest semver bump
+  a3ip new-version <pkg_dir> <ver>      Bump manifest + prepend CHANGELOG entry
+  a3ip validate <package_dir>           10 normative checks + 4 advisory warnings (v1.9 + v1.10)
+  a3ip bundle <package_dir>             Build .a3ip.bundle for AI-to-AI distribution
+  a3ip zip <package_dir>                Build .a3ip.zip for human file transfer
+  a3ip platforms                        Print detected platform context (host OS + AI runtime)
+  a3ip export --format <fmt>            Export to another format (cowork-plugin, apm) [planned v0.2]
 
 See https://a3ip.dev for the full specification.
 """
@@ -68,6 +72,37 @@ def _cmd_bundle(args: argparse.Namespace) -> int:
         print("Error: " + str(e), file=sys.stderr)
         return 1
     return 0
+
+
+# --------------------------------------------------------------------
+# Subcommands lifted from creator-repo/scripts in v1.5.0
+# --------------------------------------------------------------------
+#
+# `a3ip scaffold` -- full intake-driven scaffold. Replaces the Creator's
+#   scripts/scaffold.py; the Creator now invokes this command instead of
+#   carrying its own copy.
+# `a3ip sync` -- detect changes since last bundle.
+# `a3ip new-version` -- bump version + prepend changelog.
+# `a3ip zip` -- build .a3ip.zip for human transfer (sibling of `bundle`).
+
+def _cmd_scaffold(args: argparse.Namespace) -> int:
+    from a3ip.scaffold_cmd import run as scaffold_run
+    return scaffold_run(args.intake, args.output_dir)
+
+
+def _cmd_sync(args: argparse.Namespace) -> int:
+    from a3ip.sync_cmd import run as sync_run
+    return sync_run(args.package_dir)
+
+
+def _cmd_new_version(args: argparse.Namespace) -> int:
+    from a3ip.new_version_cmd import run as new_version_run
+    return new_version_run(args.package_dir, args.new_version)
+
+
+def _cmd_zip(args: argparse.Namespace) -> int:
+    from a3ip.zip_cmd import run as zip_run
+    return zip_run(args.package_dir, args.output)
 
 
 # --------------------------------------------------------------------
@@ -271,7 +306,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # -- validate -------------------------------------------------------------
     p_val = sub.add_parser(
         "validate",
-        help="Run 10 normative checks plus 3 v1.9 advisory warnings",
+        help="Run 10 normative checks plus 4 advisory warnings (v1.9 + v1.10)",
         description=(
             "Validate an A3IP package against the spec.\n\n"
             "Runs 10 normative checks (errors block install):\n"
@@ -286,10 +321,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "   9. Trust->plan section      -- write/shell trust requires ## Plan in INSTALL.md\n"
             "  10. INSTALL.md spec          -- install_dir + installed.json wiring correct\n"
             "\n"
-            "Plus 3 v1.9 advisory warnings (do not block install; harden to errors in v2.0):\n"
-            "  11. Adapter outcome coverage -- runtime adapters address Step 5/6/7 outcomes\n"
+            "Plus 4 advisory warnings (do not block install; harden to errors in v2.0):\n"
+            "  11. Adapter outcome coverage -- runtime adapters address discovery + Steps 5/6/7\n"
+            "                                  outcomes (v1.10: scans install AND uninstall\n"
+            "                                  adapters; flags missing uninstall-skill.md pairs)\n"
             "  12. INSTALL.md tier shape    -- Tier 2 steps free of procedure-language leakage\n"
             "  13. Adapter knowledge-shape  -- adapters are more prose than code (>= 2:1 ratio)\n"
+            "                                  (v1.10: scans install AND uninstall adapters)\n"
+            "  14. Uninstall coverage       -- INSTALL.md contains '## Uninstalling' section (v1.10+)\n"
             "\n"
             "Exit code: 0 if all errors are zero (warnings present or absent), 1 otherwise."
         ),
@@ -301,6 +340,63 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print a JSON report in addition to the human-readable output",
     )
     p_val.set_defaults(func=_cmd_validate)
+
+    # -- scaffold (v1.5.0+) ---------------------------------------------------
+    p_scaffold = sub.add_parser(
+        "scaffold",
+        help="Full intake-driven scaffold (creates a complete v1.10 package)",
+        description=(
+            "Scaffold a complete A3IP package from an intake.json file.\n\n"
+            "intake.json describes the package's name, description, components,\n"
+            "configuration keys, dependencies, and platforms. The scaffold\n"
+            "generates manifest.yaml, INSTALL.md (including v1.10 Uninstalling\n"
+            "section), CONFIGURE.md, CHANGELOG.md, OS adapters, and skeleton\n"
+            "components and scripts.\n\n"
+            "For a quick minimal scaffold (no intake), use `a3ip new <name>` instead."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_scaffold.add_argument("intake", help="Path to intake.json")
+    p_scaffold.add_argument(
+        "--output-dir", "-o", metavar="DIR", dest="output_dir", default=".",
+        help="Parent directory to create the package in (default: current directory)",
+    )
+    p_scaffold.set_defaults(func=_cmd_scaffold)
+
+    # -- sync (v1.5.0+) -------------------------------------------------------
+    p_sync = sub.add_parser(
+        "sync",
+        help="Detect changes since last bundle and suggest a semver bump",
+        description=(
+            "Detect file changes in the package directory since the last\n"
+            "`a3ip bundle` call. Reports added / modified / deleted files,\n"
+            "suggests a semver bump (patch / minor / major) with reasoning,\n"
+            "and writes .a3ip-sync-report.json so that `a3ip new-version`\n"
+            "can auto-populate the CHANGELOG's '### Files changed' block."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_sync.add_argument("package_dir", help="Path to the package directory")
+    p_sync.set_defaults(func=_cmd_sync)
+
+    # -- new-version (v1.5.0+) ------------------------------------------------
+    p_newv = sub.add_parser(
+        "new-version",
+        help="Bump manifest version and prepend a CHANGELOG entry",
+        description=(
+            "Cut a new version of the package. Updates `version:` and\n"
+            "`latest_change:` in manifest.yaml, and prepends a templated\n"
+            "CHANGELOG.md entry. If `.a3ip-sync-report.json` was produced\n"
+            "by `a3ip sync`, the '### Files changed' section is auto-populated\n"
+            "and the report is consumed.\n\n"
+            "Run order: `a3ip sync` -> `a3ip new-version` -> fill TODOs ->\n"
+            "`a3ip validate` -> `a3ip bundle`."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_newv.add_argument("package_dir", help="Path to the package directory")
+    p_newv.add_argument("new_version", help="New version (e.g. 1.1.0)")
+    p_newv.set_defaults(func=_cmd_new_version)
 
     # -- bundle ---------------------------------------------------------------
     p_bun = sub.add_parser(
@@ -327,6 +423,24 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_bun.set_defaults(func=_cmd_bundle)
+
+    # -- zip (v1.5.0+) --------------------------------------------------------
+    p_zip = sub.add_parser(
+        "zip",
+        help="Build a .a3ip.zip file for human-to-human file transfer",
+        description=(
+            "Bundle a package directory into a .a3ip.zip archive. Use this for\n"
+            "email / cloud-drive transfer to humans; for AI-to-AI transfer use\n"
+            "`a3ip bundle` instead (which produces a plain-text .a3ip.bundle)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_zip.add_argument("package_dir", help="Path to the package directory")
+    p_zip.add_argument(
+        "--output", "-o", metavar="PATH", default=None,
+        help="Output path for the zip (default: <package_dir>/../<name>.a3ip.zip)",
+    )
+    p_zip.set_defaults(func=_cmd_zip)
 
     # -- platforms ------------------------------------------------------------
     p_plat = sub.add_parser(
