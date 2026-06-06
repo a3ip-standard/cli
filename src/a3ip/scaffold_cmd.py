@@ -67,7 +67,7 @@ def _uses_v12_features(pkg: dict) -> bool:
 
 
 
-def ensure_spec_required_keys(pkg: dict) -> None:
+def ensure_spec_required_keys(pkg: dict, platform_config=None) -> None:
     """
     Inject config keys that the A3IP spec requires every package to declare.
     Mutates pkg in place. Idempotent.
@@ -79,26 +79,52 @@ def ensure_spec_required_keys(pkg: dict) -> None:
         before persisting (file-reading tools at runtime do not expand
         tildes, so storing the literal "~/..." breaks the runtime config
         lookup).
+
+    platform_config (a3ip.platform_config.PlatformConfig | None):
+      When provided and non-empty, the install_dir description lists each
+      configured platform's default install_dir resolved with the package
+      name substituted. When None or empty, the description uses a neutral
+      TODO marker.
     """
     config_keys = pkg.get("configuration", [])
     name = pkg.get("name", "package")
 
     if not any(ck.get("key") == "install_dir" for ck in config_keys):
-        default = f"~/.claude/packages/{name}/"
+        # Build a platform-aware description from platform_config (if any).
+        if platform_config is not None and not platform_config.is_empty():
+            per_platform = [
+                "  - " + p.display_name + ": " + p.resolved_config_dir(name)
+                for p in platform_config.ordered_entries()
+            ]
+            defaults_block = (
+                "Default depends on the target platform:\n"
+                + "\n".join(per_platform)
+            )
+            # Use the first listed platform's default as the placeholder.
+            first = platform_config.ordered_entries()[0]
+            default = first.resolved_config_dir(name)
+        else:
+            defaults_block = (
+                "TODO: provide platform-specific default install_dir values via "
+                "`a3ip scaffold --platform-config <path>`. Without that flag, the "
+                "scaffolder cannot recommend a default per platform."
+            )
+            default = "~/" + name + "/"
+
         install_dir_key = {
             "key": "install_dir",
             "label": "Installation directory",
             "description": (
-                f"Directory where {name}\'s config.json, installed.json, and scripts will be stored. "
-                "Default is the platform convention (Cowork / Claude Code: ~/.claude/packages/<name>/, "
-                "Codex: ~/.codex/packages/<name>/). "
-                "IMPORTANT for the install AI: expand the user-typed value to an absolute path before "
-                "writing to config.json or installed.json. On Cowork (Windows), expand `~` to the "
-                "Windows user home using the platform's native separator -- e.g. ~/.claude/packages/X/ "
-                "becomes the absolute path under C:/Users/USERNAME/.claude/packages/X/. On Linux/macOS, "
-                "expand to /home/USERNAME/ or /Users/USERNAME/. The runtime AI reads this value via "
-                "the Read tool which does NOT expand ~ -- storing a tilde here breaks the runtime "
-                "config lookup."
+                "Directory where " + name + "'s config.json, installed.json, and "
+                "scripts will be stored. " + defaults_block + ". "
+                "IMPORTANT for the install AI: expand the user-typed value to an "
+                "absolute path before writing to config.json or installed.json. "
+                "The path-expansion mechanism is host-runtime-specific -- consult "
+                "adapters/runtime/<your-platform>/install-skill.md for the file-tool "
+                "that expands `~` correctly on this host. The runtime AI reads the "
+                "stored value as-is, so storing a literal `~` breaks the runtime "
+                "config lookup. Strip trailing separators (slash or backslash) "
+                "before storing."
             ),
             "type": "string",
             "required": True,
@@ -116,56 +142,63 @@ def ensure_spec_required_keys(pkg: dict) -> None:
 
 # Adapter skeletons (v1.7 two-tier model)
 
-WINDOWS_FILE_OPS = """# Windows file operations — tool selection
+WINDOWS_FILE_OPS = """# Windows file operations -- OS-level conventions
 
-This adapter governs filesystem operations on a Windows host. Other axes (AI
-runtime) live in `adapters/runtime/<name>/`.
+This adapter governs filesystem operations on a Windows host. It contains
+ONLY OS-axis facts (path conventions, home-variable, expansion behavior).
+Runtime-axis concerns -- which specific file tool to use for `~`-prefixed
+paths, how a particular AI runtime sandboxes file access, what to do when
+the runtime's bash sandbox conflicts with Windows paths -- live in
+`adapters/runtime/<runtime>/install-skill.md`, NOT here.
 
-## Tool selection for `~`-prefixed paths
+## User home
 
-On Windows, `~` is the user's home directory (typically `C:/Users/<user>/`).
-Different tools available to the AI handle `~` differently:
-
-| Tool | `~` expansion on Windows |
-|---|---|
-| `mcp__filesystem__read_file` / `__write_file` | YES — expands to Windows user home |
-| Windows-native Python `os.path.expanduser('~')` | YES |
-| Cowork bash sandbox (`~`, `$HOME`, expanduser) | NO — resolves to the ephemeral Linux sandbox home, NOT Windows |
-| Read tool (raw `~/...`) | NO — does not expand |
-
-**Rule:** for reading or writing persistent files at `~`-prefixed paths on a
-Windows host, use a YES-row tool. Doing so guarantees the AI is talking to the
-Windows filesystem, not a sandbox.
+On Windows, the user home directory is typically `C:/Users/<user>/`.
+The environment variable is `%USERPROFILE%`. OneDrive-redirected home
+folders are normal -- the resolved path may be under
+`C:/Users/<user>/OneDrive/` rather than `C:/Users/<user>/`. Use whatever
+resolved path the OS returns at install time.
 
 ## Path separator
 
-In JSON files, use forward slashes — Windows accepts them in most contexts.
-For paths emitted into shell or native Windows code, use backslashes.
+In JSON files and most modern APIs, forward slashes are accepted.
+Native Windows tooling (legacy APIs, batch scripts) prefers backslashes.
+Strip trailing `/` and `\\` from any user-provided directory path before
+storing it -- the spec's path-separator normalization rule applies on
+every host OS.
 
 ## Persistent locations
 
-Per spec Platform Conventions: `C:/Users/<user>/.claude/packages/<name>/`
-(Cowork / Claude Code) or `C:/Users/<user>/.codex/packages/<name>/` (Codex).
+Persistent install directories on Windows usually live under
+`%USERPROFILE%/.<runtime>/packages/<name>/`. The exact subdirectory under
+the user home is runtime-specific -- see the runtime adapter for the
+target platform.
+
+## Path expansion behavior
+
+A bare `~` is NOT expanded by all file-reading APIs. Some tools auto-expand
+it to `%USERPROFILE%`; others treat it as a literal directory named `~`.
+The install adapter MUST resolve `~` to its absolute Windows path before
+persisting any value to `config.json` or `installed.json`. Storing a
+literal `~` breaks the runtime config lookup on any tool that does not
+expand it.
+
+Which specific tool/method to use for this expansion is a runtime concern
+-- consult `adapters/runtime/<runtime>/install-skill.md` for that
+platform's recommended approach.
 """
 
-POSIX_FILE_OPS = """# POSIX (macOS / Linux) file operations — tool selection
+POSIX_FILE_OPS = """# POSIX (macOS / Linux) file operations -- OS-level conventions
 
-This adapter governs filesystem operations on a POSIX host. Other axes (AI
-runtime) live in `adapters/runtime/<name>/`.
+This adapter governs filesystem operations on a POSIX host. It contains
+ONLY OS-axis facts. Runtime-axis concerns -- which file tool, which
+sandboxing model -- live in `adapters/runtime/<runtime>/install-skill.md`,
+NOT here.
 
-## Tool selection for `~`-prefixed paths
+## User home
 
-On POSIX, `~` is the user's home (`/home/<user>/` Linux, `/Users/<user>/`
-macOS). Most tools handle it natively:
-
-| Tool | `~` expansion |
-|---|---|
-| Python `os.path.expanduser('~')` | YES |
-| Shell `$HOME` | YES |
-| `mcp__filesystem` if available | YES |
-| Most file-reading APIs | YES |
-
-No special precautions needed.
+On POSIX systems, the user home is `/home/<user>/` on Linux and
+`/Users/<user>/` on macOS. The environment variable is `$HOME`.
 
 ## Path separator
 
@@ -173,8 +206,19 @@ Forward slashes throughout.
 
 ## Persistent locations
 
-`~/.claude/packages/<name>/` (Cowork / Claude Code) or
-`~/.codex/packages/<name>/` (Codex).
+Persistent install directories on POSIX usually live under
+`~/.<runtime>/packages/<name>/`. The exact subdirectory under the home is
+runtime-specific -- see the runtime adapter for the target platform.
+
+## Path expansion behavior
+
+Most POSIX file-reading APIs handle `~` natively (shell expansion, Python's
+`os.path.expanduser`, etc.). Even so, the install adapter SHOULD resolve
+`~` to an absolute path before persisting any value -- different tools at
+runtime may treat `~` differently, and storing the expanded value makes the
+file portable to runtimes that do not expand.
+
+Strip trailing `/` from any user-provided directory path before storing it.
 """
 
 
@@ -190,7 +234,7 @@ def build_manifest(pkg: dict) -> str:
     description = pkg.get("description", "")
     author = pkg.get("author", "")
     license_ = pkg.get("license", "proprietary")
-    platforms = pkg.get("platforms", ["cowork", "claude-code"])
+    platforms = pkg.get("platforms", [])
     v12 = _uses_v12_features(pkg)
 
     now_date = datetime.utcnow().strftime("%Y-%m-%d")
@@ -484,11 +528,21 @@ def build_manifest(pkg: dict) -> str:
         "# Platform compatibility",
         "# ─────────────────────────────────────────",
         "",
-        "platforms:",
-        "  tested:",
     ]
-    for p in platforms:
-        lines.append(f"    - {p}")
+    if platforms:
+        lines += [
+            "platforms:",
+            "  tested:",
+        ]
+        for p in platforms:
+            lines.append(f"    - {p}")
+    else:
+        lines += [
+            "# TODO(a3ip-creator): list the platforms this package has been tested on.",
+            "# Example: cowork, codex, claude-code, cursor.",
+            "platforms:",
+            "  tested: []",
+        ]
 
     return "\n".join(lines) + "\n"
 
@@ -742,7 +796,18 @@ def _needs_plan_section(scripts: list) -> bool:
     return any(sc.get("trust_level", "") in elevated for sc in scripts)
 
 
-def build_install(pkg: dict) -> str:
+def build_install(pkg: dict, platform_config=None) -> str:
+    """Generate INSTALL.md content for the package.
+
+    platform_config (a3ip.platform_config.PlatformConfig | None):
+      Platform metadata used to emit per-platform routing in Steps 5/6/7
+      and the "Platform-Specific Notes" section. When None or empty, the
+      template inserts TODO markers in place of platform routing.
+    """
+    from a3ip.platform_config import PlatformConfig
+    if platform_config is None:
+        platform_config = PlatformConfig.empty()
+
     name = pkg["name"]
     protocols = pkg.get("protocols", [])
     scripts = pkg.get("scripts", [])
@@ -757,6 +822,19 @@ def build_install(pkg: dict) -> str:
     v12 = _uses_v12_features(pkg)
 
     has_windows_scripts = any("windows" in sc.get("platforms", []) for sc in scripts)
+
+    # Intersect the intake's platforms.tested list with the platform-config
+    # entries -- we only emit per-platform routing for platforms the config
+    # knows about. Anything in intake but not in config produces a TODO marker.
+    intake_platforms = [p.lower() for p in pkg.get("platforms", [])]
+    known_entries = [
+        platform_config.get(pid) for pid in intake_platforms
+        if pid in platform_config.platforms
+    ]
+    unknown_platform_ids = [
+        pid for pid in intake_platforms if pid not in platform_config.platforms
+    ]
+    has_any_platform_routing = bool(known_entries) or bool(unknown_platform_ids)
 
     step = 0
 
@@ -931,15 +1009,18 @@ def build_install(pkg: dict) -> str:
         s("Resolve install_dir to an absolute path"),
         "",
         "Before writing any file or storing the value, expand `{{config.install_dir}}`",
-        "to a platform-native absolute path:",
+        "to a host-native absolute path:",
         "",
-        "- **Cowork (Windows):** if the value contains `~`, replace it with the user's",
-        "  Windows home (typically the path under `C:/Users/USERNAME/` -- use the",
-        "  platform's native separator, double backslashes inside JSON files).",
-        "  Example: `~/.claude/packages/" + name + "/` -> the absolute path under",
-        "  `C:/Users/USERNAME/.claude/packages/" + name + "/`.",
-        "- **Linux / macOS:** if the value contains `~`, replace it with `$HOME` or",
-        "  `os.path.expanduser('~')`.",
+        "- **Windows hosts:** if the value contains `~`, replace it with the user's",
+        "  Windows home (typically the path under `C:/Users/USERNAME/`). Use the",
+        "  platform's native separator and double backslashes inside JSON files.",
+        "- **POSIX hosts (macOS / Linux):** if the value contains `~`, replace it",
+        "  with `$HOME` or `os.path.expanduser('~')`.",
+        "",
+        "Example expansion: `~/.claude/packages/" + name + "/` -> the absolute",
+        "path under the user's home directory followed by",
+        "`.claude/packages/" + name + "/` (or whichever path the runtime adapter",
+        "specifies for this platform).",
         "",
         "From this point on, treat `{{config.install_dir}}` as the absolute expanded",
         "path. Persist the expanded value (not the user-typed literal) when you write",
@@ -1011,7 +1092,6 @@ def build_install(pkg: dict) -> str:
             ]
 
     # Install skills
-    cowork_listed = "cowork" in [p.lower() for p in pkg.get("platforms", [])]
     if skills:
         lines += [
             s("Make skills discoverable to the host runtime"),
@@ -1024,31 +1104,46 @@ def build_install(pkg: dict) -> str:
             "conventions and a worked example.",
             "",
         ]
-        if cowork_listed:
-            # Cowork routes to adapter; other platforms keep generic copy.
+        if has_any_platform_routing:
             lines += [
-                "**Cowork (primary path):** follow `adapters/runtime/cowork/install-skill.md`.",
-                "The combined SKILL.md, scripts, and artifact templates are packaged",
-                "into a `.skill` zip and installed via the Cowork UI **\"Save skill\"**",
-                "button. The adapter also handles the Set Up Artifacts step below",
-                "(via `mcp__cowork__create_artifact`). When the install AI takes the",
-                "Cowork path, do NOT also run the generic file-copy lines that follow",
-                "-- doing both produces a duplicate Save-skill prompt and a partial",
-                "install.",
+                "**Platform routing:**",
                 "",
-                "**Claude Code / Codex / Cursor / Other platforms:**",
+            ]
+            for entry in known_entries:
+                if entry.adapter_file_authored:
+                    lines.append(
+                        f"- **{entry.display_name}** ({entry.description}): "
+                        f"follow `adapters/runtime/{entry.id}/install-skill.md`."
+                    )
+                else:
+                    lines.append(
+                        f"- **{entry.display_name}** ({entry.description}): "
+                        f"`adapters/runtime/{entry.id}/install-skill.md` is a "
+                        f"stub -- adapt the generic procedure below until the "
+                        f"adapter is authored."
+                    )
+            for pid in unknown_platform_ids:
+                lines.append(
+                    f"- **{pid}**: <!-- TODO(a3ip-creator): add platform_config "
+                    f"entry for '{pid}' or remove from package platforms list. -->"
+                )
+            lines += [
+                "",
+                "If the install AI takes a platform-specific adapter path above, do",
+                "NOT also run the generic file-copy lines below -- doing both may",
+                "produce duplicate registration prompts and a partial install.",
+                "",
+                "**Generic fallback (any platform without an adapter route above):**",
                 "",
             ]
         for sk in skills:
             sname = kebab(sk["name"])
-            lines.append(f"Copy `components/skills/{sname}/` into your platform\'s skills directory.")
-        lines += [
-            "",
-            "- **Claude Code:** copy to `~/.claude/skills/`",
-            "- **Codex:** copy to `C:/Users/USERNAME/.codex/skills/` (Windows native separators in actual use)",
-            "- **Other platforms:** load the SKILL.md content as a persistent instruction set.",
-            "",
-        ]
+            lines.append(
+                f"Copy `components/skills/{sname}/` into the host runtime's "
+                f"skills directory. The exact location is platform-specific -- "
+                f"consult the runtime's documentation."
+            )
+        lines.append("")
 
     # Set up artifacts
     if artifacts:
@@ -1064,26 +1159,45 @@ def build_install(pkg: dict) -> str:
             "platform's artifact mechanism.",
             "",
         ]
-        if cowork_listed:
+        if has_any_platform_routing:
             lines += [
-                "**Cowork:** handled by `adapters/runtime/cowork/install-skill.md` Step C3",
-                "(`mcp__cowork__create_artifact`). Skip this section entirely if you",
-                "ran the adapter in the Install Skills step. The artifact is created",
-                "at install time so it appears in the sidebar immediately, not on",
-                "first use.",
-                "",
-                "**Claude Code / Cursor / other HTML-capable platforms:**",
+                "**Platform routing:**",
                 "",
             ]
+            for entry in known_entries:
+                if entry.adapter_file_authored:
+                    lines.append(
+                        f"- **{entry.display_name}**: handled by "
+                        f"`adapters/runtime/{entry.id}/install-skill.md`. "
+                        f"Skip the per-artifact instructions below if the "
+                        f"adapter covers this outcome."
+                    )
+                else:
+                    lines.append(
+                        f"- **{entry.display_name}**: "
+                        f"`adapters/runtime/{entry.id}/install-skill.md` is a "
+                        f"stub -- use the per-artifact fallback instructions "
+                        f"below."
+                    )
+            for pid in unknown_platform_ids:
+                lines.append(
+                    f"- **{pid}**: <!-- TODO(a3ip-creator): add platform_config "
+                    f"entry for '{pid}' or remove from package platforms list. -->"
+                )
+            lines.append("")
+        lines += [
+            "**Per-artifact fallback (any platform without an adapter route above):**",
+            "",
+        ]
         for a in artifacts:
             aname = kebab(a["name"])
             lines += [
                 f"**{a['name']}** (`components/artifacts/{aname}/`)",
                 "",
-                "- **HTML-artifact platforms (Claude.ai):**",
+                "- **HTML-capable platforms:**",
                 f"  Create a new artifact using `artifact.html`. Name it \"{a['name']}\".",
                 "",
-                "- **CLI / file-based platforms (Codex):**",
+                "- **Text-only platforms:**",
                 "  Use the description in `artifact.md` to maintain an equivalent",
                 "  file-based structure (e.g. a markdown table).",
                 "",
@@ -1102,15 +1216,37 @@ def build_install(pkg: dict) -> str:
             "per `adapters/runtime/<your-platform>/install-skill.md`.",
             "",
         ]
-        if cowork_listed:
+        if has_any_platform_routing:
             lines += [
-                "**Cowork:** the protocol(s) are folded into the combined SKILL.md in",
-                "the `.skill` zip from the Install Skills step. Their trigger phrases",
-                "live in the skill\'s `description:` frontmatter and Cowork\'s skill",
-                "matcher picks them up automatically. No separate registration needed.",
+                "**Platform routing:**",
                 "",
-                "**Claude Code / Codex / Cursor:** read each protocol file and register",
-                "it manually:",
+            ]
+            for entry in known_entries:
+                if entry.adapter_file_authored:
+                    lines.append(
+                        f"- **{entry.display_name}**: registration is handled "
+                        f"by `adapters/runtime/{entry.id}/install-skill.md`. "
+                        f"Skip the manual registration steps below if the "
+                        f"adapter covers this outcome."
+                    )
+                else:
+                    lines.append(
+                        f"- **{entry.display_name}**: "
+                        f"`adapters/runtime/{entry.id}/install-skill.md` is a "
+                        f"stub -- register each protocol manually using the "
+                        f"instructions below."
+                    )
+            for pid in unknown_platform_ids:
+                lines.append(
+                    f"- **{pid}**: <!-- TODO(a3ip-creator): add platform_config "
+                    f"entry for '{pid}' or remove from package platforms list. -->"
+                )
+            lines += [
+                "",
+                "**Manual registration fallback (any platform without an adapter "
+                "route above):**",
+                "",
+                "Read each protocol file and register it:",
                 "",
             ]
         else:
@@ -1177,7 +1313,7 @@ def build_install(pkg: dict) -> str:
         f'  "package": "{name}",',
         f'  "version": "{pkg.get("version", "1.0.0")}",',
         '  "installed_at": "<current ISO-8601 timestamp>",',
-        '  "platform": "<detected platform — cowork / claude-code / codex / etc.>",',
+        '  "platform": "<detected platform id — e.g. cowork, codex, claude-code, cursor>",',
         f'  "a3ip_spec": "{spec_ver}",',
         '  "config_dir": "{{config.install_dir}}"',
         "}",
@@ -1195,16 +1331,46 @@ def build_install(pkg: dict) -> str:
         "",
         "## Platform-Specific Notes",
         "",
-        "### Cowork (primary platform)",
-        "Full support for artifacts, skills, and scheduled tasks.",
-        "",
-        "### Claude Code (CLI)",
-        "Full protocol support. Artifacts degrade to markdown files.",
-        "Use cron or a system scheduler for automated tasks.",
-        "",
-        "### Other platforms",
-        "Core protocols work on any platform. Adapt as needed.",
-        "",
+    ]
+    if has_any_platform_routing:
+        for entry in known_entries:
+            lines += [
+                f"### {entry.display_name}",
+                entry.description + ".",
+                (
+                    f"See `adapters/runtime/{entry.id}/install-skill.md` for "
+                    "registration mechanics, artifact handling, and any "
+                    "platform-specific quirks."
+                    if entry.adapter_file_authored
+                    else f"`adapters/runtime/{entry.id}/install-skill.md` is a "
+                    "stub -- fill it in before relying on this platform."
+                ),
+                "",
+            ]
+        for pid in unknown_platform_ids:
+            lines += [
+                f"### {pid}",
+                f"<!-- TODO(a3ip-creator): describe {pid} support, or remove "
+                f"this platform from the package's platforms list. -->",
+                "",
+            ]
+        lines += [
+            "### Other platforms",
+            "Core protocols and components are platform-neutral; adapt as needed.",
+            "",
+        ]
+    else:
+        lines += [
+            "<!-- TODO(a3ip-creator): no platform_config was supplied at scaffold "
+            "time. Document the platforms this package supports here, or "
+            "re-run `a3ip scaffold --platform-config <path>` to populate this "
+            "section automatically. -->",
+            "",
+            "### Other platforms",
+            "Core protocols and components are platform-neutral; adapt as needed.",
+            "",
+        ]
+    lines += [
         "---",
         "",
         "## Upgrading",
@@ -1363,8 +1529,11 @@ def build_readme(pkg: dict) -> str:
         "## Platforms",
         "",
     ]
-    for p in platforms:
-        lines.append(f"- {p}")
+    if platforms:
+        for p in platforms:
+            lines.append(f"- {p}")
+    else:
+        lines.append("_TODO(a3ip-creator): list the platforms this package has been tested on._")
 
     lines += [
         "",
@@ -1710,12 +1879,23 @@ def build_ps1_stub(sc: dict, pkg_name: str) -> str:
 # Main
 # ─────────────────────────────────────────────────────────────
 
-def scaffold(intake_path: str, output_dir: str):
+def scaffold(intake_path: str, output_dir: str, platform_config=None):
+    """Generate a complete A3IP package from intake.json.
+
+    platform_config is an optional a3ip.platform_config.PlatformConfig instance.
+    When None, scaffolded content uses neutral placeholders / TODO markers in
+    place of platform-specific values (paths, display names, install_method,
+    etc.). When provided, builders fill those placeholders from the config.
+    """
+    from a3ip.platform_config import PlatformConfig
+    if platform_config is None:
+        platform_config = PlatformConfig.empty()
+
     with open(intake_path, encoding="utf-8") as f:
         pkg = json.load(f)
 
     # Inject spec-required config keys (install_dir, etc.) before any builder runs.
-    ensure_spec_required_keys(pkg)
+    ensure_spec_required_keys(pkg, platform_config=platform_config)
 
     name = pkg["name"]
     pkg_dir = Path(output_dir) / f"{name}.a3ip"
@@ -1727,7 +1907,7 @@ def scaffold(intake_path: str, output_dir: str):
 
     # ── Core files ──────────────────────────────────
     write(pkg_dir / "manifest.yaml",  build_manifest(pkg))
-    write(pkg_dir / "INSTALL.md",     build_install(pkg))
+    write(pkg_dir / "INSTALL.md",     build_install(pkg, platform_config=platform_config))
     write(pkg_dir / "README.md",      build_readme(pkg))
     write(pkg_dir / "CHANGELOG.md",   build_changelog(pkg))
 
@@ -1785,16 +1965,31 @@ def scaffold(intake_path: str, output_dir: str):
     print("  3. Run `a3ip bundle " + str(pkg_dir) + "` to generate the distributable bundle")
 
 
-def run(intake_path: str, output_dir: str = None) -> int:
+def run(intake_path: str, output_dir: str = None, platform_config_path: str = None) -> int:
     """CLI entry point. Returns 0 on success, 1 on error.
 
     Wraps scaffold() with error handling so the cli.py dispatcher can return
     an exit code without relying on sys.exit calls inside the scaffolder.
+
+    platform_config_path is the optional path to a platform-config JSON file
+    (per docs/platform-config.schema.json). When None, scaffold() emits
+    neutral content with TODO markers in place of platform-specific values.
     """
     if output_dir is None:
         output_dir = "."
+
+    # Load platform-config if provided
+    platform_cfg = None
+    if platform_config_path:
+        from a3ip.platform_config import PlatformConfig
+        try:
+            platform_cfg = PlatformConfig.load(Path(platform_config_path))
+        except (FileNotFoundError, ValueError) as e:
+            print("Error: " + str(e))
+            return 1
+
     try:
-        scaffold(intake_path, output_dir)
+        scaffold(intake_path, output_dir, platform_config=platform_cfg)
     except FileNotFoundError as e:
         print("Error: " + str(e))
         return 1

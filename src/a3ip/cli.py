@@ -87,7 +87,7 @@ def _cmd_bundle(args: argparse.Namespace) -> int:
 
 def _cmd_scaffold(args: argparse.Namespace) -> int:
     from a3ip.scaffold_cmd import run as scaffold_run
-    return scaffold_run(args.intake, args.output_dir)
+    return scaffold_run(args.intake, args.output_dir, platform_config_path=args.platform_config)
 
 
 def _cmd_sync(args: argparse.Namespace) -> int:
@@ -352,6 +352,18 @@ def _build_parser() -> argparse.ArgumentParser:
             "generates manifest.yaml, INSTALL.md (including v1.10 Uninstalling\n"
             "section), CONFIGURE.md, CHANGELOG.md, OS adapters, and skeleton\n"
             "components and scripts.\n\n"
+            "PLATFORM PARAMETERIZATION (v1.5.2+):\n"
+            "The scaffold templates do NOT bake in any specific platform's paths,\n"
+            "tool names, or conventions. The authoring tool (e.g. a3ip-creator skill)\n"
+            "passes a platform-config JSON via --platform-config that maps each target\n"
+            "platform to its display name, default install_dir, install_method, and\n"
+            "host-OS default. The CLI uses those parameters to fill the templates.\n"
+            "Schema: docs/platform-config.schema.json in this repo. Example file:\n"
+            "docs/platform-config.example.json.\n\n"
+            "Behavior when --platform-config is omitted: the scaffold emits neutral\n"
+            "content with explicit TODO markers where platform-specific values would\n"
+            "otherwise appear. The package will still validate, but INSTALL.md will\n"
+            "lack per-platform routing until you re-run scaffold with --platform-config.\n\n"
             "For a quick minimal scaffold (no intake), use `a3ip new <name>` instead."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -360,6 +372,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_scaffold.add_argument(
         "--output-dir", "-o", metavar="DIR", dest="output_dir", default=".",
         help="Parent directory to create the package in (default: current directory)",
+    )
+    p_scaffold.add_argument(
+        "--platform-config", metavar="PATH", dest="platform_config", default=None,
+        help=(
+            "Path to a platform-config JSON file describing each target platform's "
+            "display_name, default_config_dir, install_method, host_os_default, "
+            "description, and adapter_file_authored fields. See "
+            "docs/platform-config.schema.json. Without this flag, scaffolded content "
+            "has TODO markers in place of platform-specific values."
+        ),
     )
     p_scaffold.set_defaults(func=_cmd_scaffold)
 

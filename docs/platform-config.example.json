@@ -1,0 +1,38 @@
+{
+  "$schema": "https://github.com/a3ip-standard/cli/blob/main/docs/platform-config.schema.json",
+  "version": "1.0",
+  "platforms": {
+    "cowork": {
+      "display_name": "Cowork",
+      "default_config_dir": "~/.claude/packages/{{name}}/",
+      "install_method": "cowork-skill",
+      "host_os_default": "windows",
+      "description": "Anthropic Cowork - Personal Skills UI registration",
+      "adapter_file_authored": true
+    },
+    "codex": {
+      "display_name": "Codex",
+      "default_config_dir": "~/.codex/packages/{{name}}/",
+      "install_method": "generic-copy",
+      "host_os_default": "windows",
+      "description": "OpenAI Codex - AGENTS.md marker registration",
+      "adapter_file_authored": true
+    },
+    "claude-code": {
+      "display_name": "Claude Code",
+      "default_config_dir": "~/.claude/packages/{{name}}/",
+      "install_method": "generic-copy",
+      "host_os_default": "posix",
+      "description": "Anthropic Claude Code - CLI developer agent, generic skills directory",
+      "adapter_file_authored": true
+    },
+    "cursor": {
+      "display_name": "Cursor",
+      "default_config_dir": "~/.cursor/packages/{{name}}/",
+      "install_method": "generic-copy",
+      "host_os_default": "posix",
+      "description": "Cursor IDE - custom domain conventions",
+      "adapter_file_authored": false
+    }
+  }
+}

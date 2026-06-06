@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/a3ip-standard/cli/blob/main/docs/platform-config.schema.json",
+  "title": "A3IP Platform Configuration",
+  "description": "Internal contract between any A3IP authoring tool (such as the a3ip-creator skill) and the a3ip CLI. The authoring tool gathers per-platform parameters from its own knowledge of supported runtimes and passes them as JSON via `a3ip scaffold --platform-config <path>`. The CLI uses the values to fill scaffold templates without baking in any specific platform. This schema is internal to the CLI/Creator pair and is NOT normative per the A3IP spec — other authoring tools may use entirely different internal APIs and remain spec-conformant as long as the packages they produce conform to the spec's package format.",
+  "type": "object",
+  "required": ["platforms"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Pointer to this schema document (optional, for IDE/editor support)."
+    },
+    "version": {
+      "type": "string",
+      "description": "Schema version, for future evolution. Defaults to '1.0' if omitted.",
+      "default": "1.0"
+    },
+    "platforms": {
+      "type": "object",
+      "description": "Map of platform-id (kebab-case identifier such as 'cowork', 'codex', 'claude-code') to its per-platform parameters. At least one entry required.",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "type": "object",
+          "required": [
+            "display_name",
+            "default_config_dir",
+            "install_method",
+            "host_os_default",
+            "description",
+            "adapter_file_authored"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "display_name": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Human-readable platform name used in generated INSTALL.md prose, manifest comments, and similar surfaces. Examples: 'Cowork', 'Codex', 'Claude Code'."
+            },
+            "default_config_dir": {
+              "type": "string",
+              "pattern": ".*\\{\\{name\\}\\}.*",
+              "description": "Template for the platform's default install_dir. MUST contain the literal '{{name}}' placeholder, which the scaffolder substitutes with the package name. Example: '~/.claude/packages/{{name}}/'."
+            },
+            "install_method": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Value emitted into installed.json's install_method field per A3IP spec v1.10 Platform Conventions. Examples: 'cowork-skill', 'generic-copy'. The spec lists known values; new values are allowed for new platforms."
+            },
+            "host_os_default": {
+              "type": "string",
+              "enum": ["windows", "posix"],
+              "description": "Most common host OS this runtime is deployed on. Drives which OS adapter is referenced as the primary example in generated content. The runtime may still be installable on the other OS family — this is just the default."
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One-line platform context used in the install_dir description and INSTALL.md prose. Examples: 'Anthropic Cowork — Personal Skills UI registration', 'OpenAI Codex — AGENTS.md marker registration'."
+            },
+            "adapter_file_authored": {
+              "type": "boolean",
+              "description": "Whether adapters/runtime/<id>/install-skill.md and uninstall-skill.md are authored content (true) or stubs to be filled in later (false). When true, generated INSTALL.md routes confidently to the adapter; when false, the routing prose notes that the adapter is a stub."
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
