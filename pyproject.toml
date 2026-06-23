@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,14 +7,14 @@ name = "a3ip"
 version = "1.5.3"
 description = "CLI for A3IP - AI Infrastructure Installation Package (pronounced 'ay-trip')"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Maksym Prydorozhko", email = "maksym.prydorozhko@gmail.com" }]
 requires-python = ">=3.9"
 keywords = ["a3ip", "ai", "agent", "workflow", "package", "installer"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
