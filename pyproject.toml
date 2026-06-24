@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a3ip"
-version = "1.5.3"
+version = "1.5.4"
 description = "CLI for A3IP - AI Infrastructure Installation Package (pronounced 'ay-trip')"
 readme = "README.md"
 license = "Apache-2.0"

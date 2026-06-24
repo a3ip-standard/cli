@@ -40,6 +40,31 @@ def yaml_str(s: str, indent: int = 0) -> str:
     if "\n" in s or len(s) > 80:
         lines = textwrap.indent(s.strip(), "  " + " " * indent)
         return f">\n{lines}\n"
+    return yaml_scalar(s)
+
+
+def yaml_scalar(s: str) -> str:
+    """Quote a single-line YAML scalar safely.
+
+    Picks the quote style based on what the value contains:
+      - no `"` and no `'`             → double-quoted (cleanest)
+      - contains `"` but not `'`      → single-quoted (avoids escapes)
+      - contains `'` but not `"`      → double-quoted (avoids escapes)
+      - contains both                 → double-quoted with `"` escaped as `\"`
+
+    This guards against the failure mode where a placeholder or default
+    value contains an unescaped `"` (e.g. a JSON-shaped example like
+    `[{"owner": "acme"}]`) that breaks the outer double-quoted scalar
+    and makes the whole manifest.yaml fail yaml.safe_load.
+    """
+    if not isinstance(s, str):
+        s = str(s)
+    has_double = '"' in s
+    has_single = "'" in s
+    if has_double and not has_single:
+        return f"'{s}'"
+    if has_double and has_single:
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
     return f'"{s}"'
 
 
@@ -471,8 +496,8 @@ def build_manifest(pkg: dict) -> str:
             options = ck.get("options")
 
             lines.append(f"  - key: {key}")
-            lines.append(f'    label: "{label}"')
-            lines.append(f'    description: "{desc}"')
+            lines.append(f"    label: {yaml_scalar(label)}")
+            lines.append(f"    description: {yaml_scalar(desc)}")
             lines.append(f"    type: {type_}")
             lines.append(f"    required: {required}")
             if sensitive:
@@ -481,13 +506,13 @@ def build_manifest(pkg: dict) -> str:
                 lines.append(f"    storage: {storage}")
             if default is not None:
                 if isinstance(default, str):
-                    lines.append(f'    default: "{default}"')
+                    lines.append(f"    default: {yaml_scalar(default)}")
                 else:
                     lines.append(f"    default: {json.dumps(default)}")
             if placeholder:
-                lines.append(f'    placeholder: "{placeholder}"')
+                lines.append(f"    placeholder: {yaml_scalar(placeholder)}")
             if validation:
-                lines.append(f'    validation: "{validation}"')
+                lines.append(f"    validation: {yaml_scalar(validation)}")
             lines.append(f"    when: {when}")
             refresh = ck.get("refresh")
             if refresh and refresh != "never":
